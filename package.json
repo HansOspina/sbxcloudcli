@@ -1,0 +1,17 @@
+{
+  "name": "sbxcloudcli",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "author": "Hans Ospina",
+  "license": "MIT",
+  "dependencies": {
+    "async": "^2.5.0",
+    "commander-plus": "0.0.6",
+    "pako": "^1.0.6",
+    "prompt": "^1.0.0",
+    "querystring": "^0.2.0",
+    "recursive-readdir": "^2.2.1",
+    "request": "^2.83.0"
+  }
+}
