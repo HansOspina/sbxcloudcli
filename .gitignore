@@ -3,7 +3,7 @@ it # Created by .ignore support plugin (hsz.mobi)
 # Built application files
 *.apk
 *.ap_
-
+.idea/
 # Files for the ART/Dalvik VM
 *.dex
 

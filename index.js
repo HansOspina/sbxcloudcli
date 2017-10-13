@@ -1,12 +1,15 @@
 'user strict'
 const prompt = require('prompt');
+const optimist = require('optimist');
 const async = require('async');
 const request = require('request');
 const fs = require('fs');
+const debug = require('debug');
 const path = require('path');
 const recursive = require('recursive-readdir');
 const querystring = require("querystring");
 const zlib = require('zlib');
+
 
 const ignore = [
   ".DS_Store",
@@ -29,6 +32,7 @@ async.waterfall([
     //
     // Start the prompt
     //
+    prompt.override = optimist.argv
     prompt.start();
     prompt.message = "sbxcloud";
 
@@ -63,9 +67,9 @@ async.waterfall([
         login: result.username,
         password: result.password,
         appfolder: result.path,
-        path: path.resolve(process.argv[process.argv.length - 3]),
-        folder_key: process.argv[process.argv.length - 2],
-        domain_id: process.argv[process.argv.length - 1]
+        path: path.resolve(process.argv[2]),
+        folder_key: process.argv[3],
+        domain_id: process.argv[4]
       });
     });
 
@@ -89,7 +93,7 @@ async.waterfall([
   function (box, cb) {
 
 
-    box.domain = box.secure.user.member_of.find(d=>d.domain_id===parseInt(box.domain_id));
+    box.domain = box.secure.user.member_of.find(d => d.domain_id === parseInt(box.domain_id));
 
     if (!box.domain) {
       return cb(new Error(`Invalid domain Id=${box.domain_id} provided.`))
@@ -100,20 +104,19 @@ async.waterfall([
   },
 
 
-
   function (box, cb) {
 
-    listFolder(box.folder_key, box.secure, function (err, folder) {
+    listFolder(box.folder_key, box.secure, function (err, folderData) {
 
       if (err) {
         return cb(err);
       }
 
-      if(folder.key_path.indexOf(box.domain.home_key)<=0){
+      if (folderData.folder.key_path.indexOf(box.domain.home_key) <= 0) {
         return cb(new Error(`The folder-key:${box.folder_key} doesn't belong to the selected domain:${box.domain.display_namne}(${box.domain.domain}).`))
       }
 
-      box.folder = folder;
+      box.folder = folderData;
 
       cb(null, box);
 
@@ -140,7 +143,7 @@ async.waterfall([
     console.log(`Deployment confirmation: 
     \n\tLocal Folder: ${box.path}
     \n\tDomain: ${box.domain.display_name}(${box.domain.domain}) Id=${box.domain.domain_id}
-    \n\tRemote Folder: sbxcloud.com -> ${box.folder.path}
+    \n\tRemote Folder: sbxcloud.com -> ${box.folder.folder.path}
     `);
 
 
@@ -155,25 +158,24 @@ async.waterfall([
         return cb(err);
       }
 
+      /**
+       * 1 List all the folders,
+       * 2 find if all the local folders in the current directory exist
+       * 3 Transfer all the files in the current folder using async.eachLimit(files,3)
+       * 4 call upload folder recursively.
+       * 5 NV: delete files that exist remotely but are not present locally?
+       */
 
-      // console.log("Will deploy the following files to sbxcloud.com:");
-      //
-      // files.forEach(file => {
-      //   const stat = fs.lstatSync(file);
-      //   console.log(file.replace(box.path, '<path>/'));
-      //
-      //   //console.log(stat.mtime.getTime());
-      //
-      // });
+      box.files = files;
 
       prompt.message = 'sbxcloud';
 
       prompt.get([{
-        description:'Is this deployment valid? (true/false)',
+        description: 'Is this deployment valid? (true/false)',
         name: 'confirmation',
         type: 'boolean',
         required: true,
-        message:'Invalid Option'
+        message: 'Invalid Option'
       }], function (err, result) {
 
 
@@ -182,24 +184,29 @@ async.waterfall([
           return cb(err);
         }
 
-        if(!result.confirmation){
+        if (!result.confirmation) {
           return cb(new Error("Deployment cancelled."));
         }
 
-        cb(null,box);
+        cb(null, box);
       });
 
     });
 
+  },
+  function (box, cb) {
+    uploadFolder('',box.path, box.files, box.folder.folder.key,box.secure, cb);
   }
 
 
 ], function (err) {
 
   if (err) {
-    console.error("Error:", err.message);
+    console.error(err);
   }
-it
+
+  console.log("Deploy Finished.")
+
 
 });
 
@@ -259,7 +266,7 @@ function loadApps(domainId, secureConfig, callback) {
 
 
   const options = {
-    url: "http://hansospina:3000/api/domain/v1/app/list?domain=" + domainId,
+    url: "https://sbxcloud.com/api/domain/v1/app/list?domain=" + domainId,
     method: 'GET',
     headers: {
       'Accept': 'application/json',
@@ -290,11 +297,46 @@ function loadApps(domainId, secureConfig, callback) {
 }
 
 
-function listFolder(folder_key, secureConfig, callback) {
+function createFolder(parent_key, name, secureConfig, callback) {
 
 
   const options = {
-    url: `http://hansospina:3000/api/content/v1/folder?key=${folder_key}`,
+    url: `https://sbxcloud.com/api/content/v1/folder?name=${name}&parent_key=${parent_key}`,
+    method: 'POST',
+    headers: {
+      'Accept': 'application/json',
+      'Accept-Encoding': 'gzip, deflate',
+      'Authorization': `Bearer ${secureConfig.token}`
+    },
+    gzip: true,
+    encoding: null,
+    json: true
+  };
+
+  request.post(options, function (error, response, body) {
+
+
+    if (error || body.error) {
+      callback(error?error:new Error(body.error));
+    } else {
+
+      if (body.success) {
+
+        body.contents = [];
+        callback(null, body);
+      } else {
+        callback(new Error("Unknown error"));
+      }
+    }
+  });
+
+
+}
+
+function listFolder(folder_key, secureConfig, callback) {
+
+  const options = {
+    url: `https://sbxcloud.com/api/content/v1/folder?key=${folder_key}`,
     method: 'GET',
     headers: {
       'Accept': 'application/json',
@@ -310,11 +352,11 @@ function listFolder(folder_key, secureConfig, callback) {
   request.get(options, function (error, response, body) {
 
     if (error || body.error) {
-      callback(error);
+      callback(error?error:body.error);
     } else {
 
       if (body.success) {
-        callback(null, body.folder);
+        callback(null, body);
       } else {
         callback(new Error("Unknown error"));
       }
@@ -324,3 +366,84 @@ function listFolder(folder_key, secureConfig, callback) {
 
 }
 
+
+function uploadFolder(padding, dirPath, fullList, remoteFolderKey, secureConfig, callback) {
+
+
+
+  console.log(`${padding}|->${path.basename(dirPath)}`);
+
+
+  const dirs = fs.readdirSync(dirPath).filter(f => fs.statSync(path.join(dirPath, f)).isDirectory());
+
+  async.waterfall([
+
+    function (cb) {
+      listFolder(remoteFolderKey, secureConfig, function(err,f){
+        cb(err,f);
+      })
+    },
+
+    function (remoteFolder, cb) {
+
+      const box = {
+        remoteFolder: remoteFolder,
+        remoteSubFolders: {},
+        remoteFiles: {}
+      };
+
+      remoteFolder.contents.reduce((pre, f) => {
+
+        if (f.item_type === 'F') {
+          pre.remoteSubFolders[f.name] = f
+        }else {
+          pre.remoteFiles[f.name] = f
+        }
+        return pre;
+      }, box);
+
+      // check if each remote subfolder exists, if not create it.
+      async.eachLimit(dirs, 3,(d, cbIter) => {
+
+        if (box.remoteSubFolders[d]) {
+          return cbIter(null);
+        }
+
+        console.log(`[CREATE] remote:${path.join(dirPath, d)}`);
+
+        createFolder(remoteFolder.folder.key, d,secureConfig, function (err, folder) {
+
+          if (err) {
+            return cbIter(err);
+          }
+
+          box.remoteSubFolders[d] = folder.folder;
+
+          cbIter(null);
+
+        });
+
+      }, function (err) {
+        cb(err, box);
+      });
+
+    },
+    function (box, cb) {
+
+      if(dirs.length===0){
+          return cb(null,box);
+      }
+
+      async.eachSeries(dirs, (d, cbIter) => {
+        uploadFolder('\t'+padding,path.join(dirPath, d), fullList, box.remoteSubFolders[d].key, secureConfig, cbIter);
+      }, err=>{cb(err,box)});
+
+    },
+    function (box, cb) {
+      cb(null);
+    }
+
+  ], callback);
+
+
+}
